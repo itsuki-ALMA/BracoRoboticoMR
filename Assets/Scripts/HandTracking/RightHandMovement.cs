@@ -14,7 +14,12 @@ public class RightHandMovement : MonoBehaviour
     [Tooltip("Movimentos menores que isso serão considerados ruído.")]
     [SerializeField] private float deadZone = 0.005f;
 
+    [Header("Suavização")]
+    [Tooltip("Velocidade de suavização do movimento da mão. Maior = responde mais rápido porém mais ruído. Menor = mais suave porém mais atraso.")]
+    [SerializeField] private float smoothingSpeed = 10f;
+
     private Vector3 relativePosition;
+    private Vector3 filteredRelativePosition;
 
     private float xPercent;
     private float yPercent;
@@ -69,20 +74,30 @@ public class RightHandMovement : MonoBehaviour
                 palmPose.position
             );
 
+        // suaviza a posição antes de calcular os eixos,
+        // para o braço não ficar espasmando o motor
+        // com ruído do hand tracking.
+        filteredRelativePosition =
+            Vector3.Lerp(
+                filteredRelativePosition,
+                relativePosition,
+                smoothingSpeed * Time.deltaTime
+            );
+
         CalculateAxis(
-            relativePosition.x,
+            filteredRelativePosition.x,
             out xPercent,
             out xDirection
         );
 
         CalculateAxis(
-            relativePosition.y,
+            filteredRelativePosition.y,
             out yPercent,
             out yDirection
         );
 
         CalculateAxis(
-            relativePosition.z,
+            filteredRelativePosition.z,
             out zPercent,
             out zDirection
         );

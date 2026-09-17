@@ -13,8 +13,13 @@ public class RobotUdpSender : MonoBehaviour
     [Tooltip("Quantidade de pacotes por segundo.")]
     [SerializeField] private float sendRateHz = 20f;
 
+    [Header("Modo de controle")]
+    [Tooltip("Se verdadeiro, cada eixo da mão move um motor de forma isolada (sem IK). Se falso, usa a cinemática inversa (IK) do RobotIKController.")]
+    [SerializeField] private bool useDirectAxisControl = true;
+
     [Header("Referências")]
     [SerializeField] private RobotIKController ikController;
+    [SerializeField] private RightHandMovement rightHandMovement;
     [SerializeField] private RightHandGripper rightHandGripper;
 
     [Header("Limites físicos dos servos")]
@@ -52,6 +57,11 @@ public class RobotUdpSender : MonoBehaviour
 
     [Tooltip("Multiplicador da variação do segundo elo.")]
     [SerializeField] private float verticalGain = 1f;
+
+    [Header("Curso por eixo - modo isolado (graus a partir do zero)")]
+    [SerializeField] private float baseRangeDegrees = 70f;
+    [SerializeField] private float frenteTrasRangeDegrees = 45f;
+    [SerializeField] private float verticalRangeDegrees = 55f;
 
     [Header("Debug")]
     [SerializeField] private bool logPackets = true;
@@ -122,9 +132,6 @@ public class RobotUdpSender : MonoBehaviour
         if (udpClient == null)
             return;
 
-        if (ikController == null)
-            return;
-
         if (rightHandGripper == null)
             return;
 
@@ -142,31 +149,46 @@ public class RobotUdpSender : MonoBehaviour
             (1f / sendRateHz);
 
         // =====================================================
-        // CAPTURA HOME DA IK
+        // MODO ISOLADO (SEM IK)
         // =====================================================
 
-        if (
-            !homeCaptured &&
-            ikController.HasValidIK
-        )
+        if (useDirectAxisControl)
         {
-            homeFrenteTrasIK =
-                ikController.FrenteTrasAngle;
-
-            homeVerticalIK =
-                ikController.VerticalAngle;
-
-            homeCaptured = true;
-
-            Debug.Log(
-                $"[RobotUdpSender] HOME IK capturado -> " +
-                $"Frente/Tras:{homeFrenteTrasIK:F1}° | " +
-                $"Vertical:{homeVerticalIK:F1}°"
-            );
+            if (rightHandMovement == null)
+                return;
         }
+        else
+        {
+            if (ikController == null)
+                return;
 
-        if (!homeCaptured)
-            return;
+            // =================================================
+            // CAPTURA HOME DA IK
+            // =================================================
+
+            if (
+                !homeCaptured &&
+                ikController.HasValidIK
+            )
+            {
+                homeFrenteTrasIK =
+                    ikController.FrenteTrasAngle;
+
+                homeVerticalIK =
+                    ikController.VerticalAngle;
+
+                homeCaptured = true;
+
+                Debug.Log(
+                    $"[RobotUdpSender] HOME IK capturado -> " +
+                    $"Frente/Tras:{homeFrenteTrasIK:F1}° | " +
+                    $"Vertical:{homeVerticalIK:F1}°"
+                );
+            }
+
+            if (!homeCaptured)
+                return;
+        }
 
         // =====================================================
         // RECALIBRANDO
@@ -190,20 +212,174 @@ public class RobotUdpSender : MonoBehaviour
         }
 
         // =====================================================
-        // IK INVÁLIDA
+        // ENVIA CONFORME O MODO
         // =====================================================
+
+        if (useDirectAxisControl)
+        {
+            SendDirectAxisState();
+            return;
+        }
 
         if (!ikController.HasValidIK)
             return;
 
-        SendCurrentState();
+        SendIkState();
     }
 
     // =========================================================
-    // ESTADO NORMAL
+    // ESTADO NORMAL - MODO ISOLADO (CADA EIXO -> UM MOTOR)
     // =========================================================
 
-    private void SendCurrentState()
+    private float ComputeDirectAngle(
+        float percent,
+        int direction,
+        float zeroAngle,
+        float rangeDegrees,
+        bool invert)
+    {
+        float signedPercent =
+            Mathf.Clamp01(percent / 100f) *
+            Mathf.Clamp(direction, -1, 1);
+
+        if (invert)
+        {
+            signedPercent =
+                -signedPercent;
+        }
+
+        return
+            zeroAngle +
+            signedPercent *
+            rangeDegrees;
+    }
+
+    private void SendDirectAxisState()
+    {
+        float baseServoAngle =
+            ComputeDirectAngle(
+                rightHandMovement.XPercent,
+                rightHandMovement.XDirection,
+                baseZeroServoAngle,
+                baseRangeDegrees,
+                invertBase
+            );
+
+        float frenteServoAngle =
+            ComputeDirectAngle(
+                rightHandMovement.ZPercent,
+                rightHandMovement.ZDirection,
+                frenteTrasHomeServoAngle,
+                frenteTrasRangeDegrees,
+                invertFrenteTras
+            );
+
+        float verticalServoAngle =
+            ComputeDirectAngle(
+                rightHandMovement.YPercent,
+                rightHandMovement.YDirection,
+                verticalHomeServoAngle,
+                verticalRangeDegrees,
+                invertVertical
+            );
+
+        float gripperPercent =
+            Mathf.Clamp(
+                rightHandGripper.GripperPercentage,
+                0f,
+                100f
+            );
+
+        if (invertGripper)
+        {
+            gripperPercent =
+                100f -
+                gripperPercent;
+        }
+
+        float gripperServoAngle =
+            Mathf.Lerp(
+                gripperMinAngle,
+                gripperMaxAngle,
+                gripperPercent / 100f
+            );
+
+        baseServoAngle =
+            Mathf.Clamp(
+                baseServoAngle,
+                baseMinAngle,
+                baseMaxAngle
+            );
+
+        frenteServoAngle =
+            Mathf.Clamp(
+                frenteServoAngle,
+                frenteTrasMinAngle,
+                frenteTrasMaxAngle
+            );
+
+        verticalServoAngle =
+            Mathf.Clamp(
+                verticalServoAngle,
+                verticalMinAngle,
+                verticalMaxAngle
+            );
+
+        gripperServoAngle =
+            Mathf.Clamp(
+                gripperServoAngle,
+                gripperMinAngle,
+                gripperMaxAngle
+            );
+
+        float basePercent =
+            AngleToPercent(
+                baseServoAngle,
+                baseMinAngle,
+                baseMaxAngle
+            );
+
+        float frentePercent =
+            AngleToPercent(
+                frenteServoAngle,
+                frenteTrasMinAngle,
+                frenteTrasMaxAngle
+            );
+
+        float verticalPercent =
+            AngleToPercent(
+                verticalServoAngle,
+                verticalMinAngle,
+                verticalMaxAngle
+            );
+
+        float gripperOutputPercent =
+            AngleToPercent(
+                gripperServoAngle,
+                gripperMinAngle,
+                gripperMaxAngle
+            );
+
+        SendPacket(
+            basePercent,
+            frentePercent,
+            verticalPercent,
+            gripperOutputPercent
+        );
+
+        PrintDebug(
+            baseServoAngle,
+            frenteServoAngle,
+            verticalServoAngle,
+            gripperServoAngle
+        );
+    }
+
+    // =========================================================
+    // ESTADO NORMAL - MODO IK (mantido no projeto, hoje inativo)
+    // =========================================================
+
+    private void SendIkState()
     {
         float baseIk =
             ikController.BaseAngle;
