@@ -3897,7 +3897,9 @@ MonoBehaviour:
   nodeMcuIp: 192.168.4.1
   nodeMcuPort: 4210
   sendRateHz: 20
+  useDirectAxisControl: 1
   ikController: {fileID: 1230243605}
+  rightHandMovement: {fileID: 1230243598}
   rightHandGripper: {fileID: 1230243599}
   baseMinAngle: 0
   baseMaxAngle: 180
@@ -3916,6 +3918,9 @@ MonoBehaviour:
   invertGripper: 0
   frenteTrasGain: 1
   verticalGain: 1
+  baseRangeDegrees: 70
+  frenteTrasRangeDegrees: 45
+  verticalRangeDegrees: 55
   logPackets: 1
   debugInterval: 0.25
 --- !u!114 &1230243608
