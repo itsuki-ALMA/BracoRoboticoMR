@@ -23,6 +23,30 @@ namespace RobotArm3D.ExplodedView
                 1f
             );
 
+        [Header("Intensidade da explosão")]
+        [Tooltip("Multiplica o quanto as peças se afastam (1 = plano original).")]
+        [SerializeField]
+        [Min(0f)]
+        private float explosionScale = 0.7f;
+
+        [Tooltip("Multiplicador extra só no eixo vertical, para não subir demais.")]
+        [SerializeField]
+        [Min(0f)]
+        private float verticalExplosionScale = 0.5f;
+
+        [Header("Posição inicial")]
+        [Tooltip("Na primeira vez que o modelo aparece, coloca ele na frente do olhar do usuário.")]
+        [SerializeField]
+        private bool placeInFrontOfUser = true;
+
+        [SerializeField]
+        [Min(0.2f)]
+        private float spawnDistance = 0.6f;
+
+        [Tooltip("Negativo = abaixo da linha dos olhos.")]
+        [SerializeField]
+        private float spawnHeightOffset = -0.1f;
+
         [Header("Estado")]
         [SerializeField]
         private bool exploded = false;
@@ -69,45 +93,60 @@ namespace RobotArm3D.ExplodedView
                 >();
             }
 
-            CreateGroupHandle();
+            if (placeInFrontOfUser)
+            {
+                StartCoroutine(PlaceInFrontOfUser());
+            }
         }
 
 
-        // Handle (esfera) para mover/girar o conjunto todo.
-        // Só cria se ainda não existir um na cena.
-        private void CreateGroupHandle()
+        // Espera a câmera XR estar rastreando (início do app) e
+        // move o modelo inteiro (as peças são filhas) para a frente
+        // do olhar. Roda uma vez, antes de qualquer manipulação.
+        private IEnumerator PlaceInFrontOfUser()
         {
+            while (
+                Time.timeSinceLevelLoad < 1f ||
+                Camera.main == null
+            )
+            {
+                yield return null;
+            }
+
             if (
                 explosionPlan == null ||
                 !explosionPlan.HasPlan()
             )
             {
-                return;
+                yield break;
             }
 
-            if (
-                FindFirstObjectByType<RobotModelXRGrabMover>()
-                != null
-            )
+            Transform head =
+                Camera.main.transform;
+
+            Vector3 forward =
+                Vector3.ProjectOnPlane(
+                    head.forward,
+                    Vector3.up
+                );
+
+            if (forward.sqrMagnitude < 0.01f)
             {
-                return;
+                forward = head.forward;
             }
+
+            forward.Normalize();
+
+            Vector3 target =
+                head.position +
+                forward * spawnDistance +
+                Vector3.up * spawnHeightOffset;
 
             Bounds bounds =
                 explosionPlan.CalculateCurrentModelBounds();
 
-            Vector3 worldPosition =
-                bounds.center +
-                Vector3.up *
-                (bounds.extents.y + 0.12f);
-
-            RobotModelXRGrabMover.Create(
-                ModelRoot,
-                this,
-                ModelRoot.InverseTransformPoint(
-                    worldPosition
-                )
-            );
+            ModelRoot.position +=
+                target - bounds.center;
         }
 
 
@@ -161,10 +200,17 @@ namespace RobotArm3D.ExplodedView
                         entry.AssembledWorldPosition
                     );
 
-                explodedLocalPositions[i] =
+                Vector3 explosionDelta =
                     root.InverseTransformPoint(
                         entry.ExplodedWorldPosition
-                    );
+                    ) - assembledLocalPositions[i];
+
+                explosionDelta.y *= verticalExplosionScale;
+                explosionDelta *= explosionScale;
+
+                explodedLocalPositions[i] =
+                    assembledLocalPositions[i] +
+                    explosionDelta;
 
                 // A explosão nunca girou as peças, então a
                 // rotação atual (no Awake) é a rotação montada.

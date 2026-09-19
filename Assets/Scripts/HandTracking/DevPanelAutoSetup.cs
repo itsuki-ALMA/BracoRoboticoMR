@@ -1,3 +1,4 @@
+using RobotArm3D.ExplodedView;
 using TMPro;
 using UnityEngine;
 using UnityEngine.EventSystems;
@@ -51,6 +52,10 @@ public class DevPanelAutoSetup : MonoBehaviour
     [SerializeField] private Button explodeButton;
     [SerializeField] private Button assembleButton;
     [SerializeField] private Button resetModelButton;
+
+    // Criado em runtime (clone do RESETAR): alterna conjunto/individual.
+    private Button moveModeButton;
+    private TMP_Text moveModeLabel;
 
     // =========================================================
     // ESTADO INICIAL
@@ -144,6 +149,7 @@ public class DevPanelAutoSetup : MonoBehaviour
         }
 
         SetupTabRuntimeListeners();
+        SetupMoveModeButton();
         ShowInfoTab();
 
         RefreshState();
@@ -306,6 +312,8 @@ public class DevPanelAutoSetup : MonoBehaviour
         SetButtonInteractable(explodeButton, interactionAllowed);
         SetButtonInteractable(assembleButton, interactionAllowed);
         SetButtonInteractable(resetModelButton, interactionAllowed);
+        SetButtonInteractable(moveModeButton, interactionAllowed);
+        UpdateMoveModeLabel();
 
         if (modelVisibleToggle != null)
         {
@@ -535,6 +543,70 @@ public class DevPanelAutoSetup : MonoBehaviour
 
         if (resetModelButton != null && resetModelButton.onClick.GetPersistentEventCount() == 0)
             resetModelButton.onClick.AddListener(controller.ResetModel);
+    }
+
+    // =========================================================
+    // MODO DE MOVIMENTAÇÃO (CONJUNTO / INDIVIDUAL)
+    // =========================================================
+
+    private void SetupMoveModeButton()
+    {
+        if (resetModelButton == null || moveModeButton != null)
+            return;
+
+        Transform parent = resetModelButton.transform.parent;
+        Transform existing = parent.Find("MoveModeButton");
+
+        if (existing != null)
+        {
+            moveModeButton = existing.GetComponent<Button>();
+        }
+        else
+        {
+            GameObject clone = Instantiate(resetModelButton.gameObject, parent);
+            clone.name = "MoveModeButton";
+            moveModeButton = clone.GetComponent<Button>();
+
+            // O clone herda o listener do RESETAR: desliga.
+            int count = moveModeButton.onClick.GetPersistentEventCount();
+            for (int i = 0; i < count; i++)
+            {
+                moveModeButton.onClick.SetPersistentListenerState(
+                    i,
+                    UnityEngine.Events.UnityEventCallState.Off
+                );
+            }
+
+            moveModeButton.onClick.RemoveAllListeners();
+        }
+
+        // Mesma linha do RESETAR: ele na metade esquerda, o modo na direita.
+        RectTransform resetRect = resetModelButton.GetComponent<RectTransform>();
+        resetRect.anchorMin = new Vector2(0f, resetRect.anchorMin.y);
+        resetRect.anchorMax = new Vector2(0.48f, resetRect.anchorMax.y);
+
+        RectTransform moveRect = moveModeButton.GetComponent<RectTransform>();
+        moveRect.anchorMin = new Vector2(0.52f, moveRect.anchorMin.y);
+        moveRect.anchorMax = new Vector2(1f, moveRect.anchorMax.y);
+
+        moveModeLabel = moveModeButton.GetComponentInChildren<TMP_Text>(true);
+
+        moveModeButton.onClick.AddListener(
+            RobotExplodedPartInteraction.ToggleMoveMode
+        );
+
+        UpdateMoveModeLabel();
+    }
+
+    private void UpdateMoveModeLabel()
+    {
+        if (moveModeLabel == null)
+            return;
+
+        moveModeLabel.text =
+            RobotExplodedPartInteraction.MoveMode == ModelMoveMode.Group
+                ? "MOVER: CONJUNTO"
+                : "MOVER: INDIVIDUAL";
     }
 
     public void ShowInfoTab()

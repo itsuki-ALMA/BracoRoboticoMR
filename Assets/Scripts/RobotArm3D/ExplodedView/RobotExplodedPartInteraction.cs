@@ -5,13 +5,42 @@ using UnityEngine.XR.Interaction.Toolkit.Interactables;
 
 namespace RobotArm3D.ExplodedView
 {
-    // Deixa cada peça do plano de explosão "segurável" (XRGrabInteractable).
-    // As peças só podem ser seguradas com o modelo explodido, parado
-    // (sem animação) e com o controle do braço pausado.
-    // Montar/explodir devolve tudo para o plano (ver RobotExplodedViewController).
+    public enum ModelMoveMode
+    {
+        // Pinçar qualquer peça move/gira o modelo inteiro.
+        Group,
+
+        // Pinçar uma peça move/gira só ela (modelo explodido).
+        Individual
+    }
+
+    // Deixa as peças do plano de explosão "seguráveis" (XRGrabInteractable).
+    // Tudo só funciona com o controle do braço pausado.
+    // Montar/explodir devolve as peças ao plano (ver RobotExplodedViewController).
     [DisallowMultipleComponent]
     public class RobotExplodedPartInteraction : MonoBehaviour
     {
+        // Modo escolhido no painel dev. Estático para valer mesmo
+        // antes do modelo ser exibido pela primeira vez.
+        public static ModelMoveMode MoveMode { get; private set; } =
+            ModelMoveMode.Group;
+
+        public static void ToggleMoveMode()
+        {
+            MoveMode =
+                MoveMode == ModelMoveMode.Group
+                    ? ModelMoveMode.Individual
+                    : ModelMoveMode.Group;
+        }
+
+        [RuntimeInitializeOnLoadMethod(
+            RuntimeInitializeLoadType.SubsystemRegistration
+        )]
+        private static void ResetStatics()
+        {
+            MoveMode = ModelMoveMode.Group;
+        }
+
         [Header("Referências")]
         [SerializeField]
         private RobotExplodedViewController controller;
@@ -29,7 +58,28 @@ namespace RobotArm3D.ExplodedView
         private readonly HashSet<XRGrabInteractable> activeGrabs =
             new HashSet<XRGrabInteractable>();
 
+        private ModelMoveMode? lastMode;
         private bool? lastAllowed;
+
+        // Modo conjunto: o modelo segue o ponto de pinça da mão,
+        // mantendo a relação que tinha quando o grab começou.
+        private XRGrabInteractable groupGrab;
+        private Transform groupAttach;
+        private Vector3 groupRelativePosition;
+        private Quaternion groupRelativeRotation;
+
+        private Transform ModelRoot
+        {
+            get
+            {
+                if (plan != null && plan.ModelRoot != null)
+                    return plan.ModelRoot;
+
+                return controller != null
+                    ? controller.ModelRoot
+                    : transform;
+            }
+        }
 
         // =========================================================
         // UNITY
@@ -57,8 +107,24 @@ namespace RobotArm3D.ExplodedView
 
         private void Update()
         {
+            ModelMoveMode mode =
+                MoveMode;
+
+            // Trocou de modo: solta tudo (cancela grabs) e
+            // reativa no próximo frame já com a configuração certa.
+            if (lastMode != mode)
+            {
+                lastMode = mode;
+
+                SetInteractablesEnabled(false);
+                ApplyTrackingForMode(mode);
+
+                lastAllowed = false;
+                return;
+            }
+
             bool allowed =
-                CanManipulate();
+                CanManipulate(mode);
 
             if (lastAllowed == allowed)
                 return;
@@ -68,13 +134,31 @@ namespace RobotArm3D.ExplodedView
             SetInteractablesEnabled(allowed);
         }
 
+        private void LateUpdate()
+        {
+            if (groupGrab == null || groupAttach == null)
+                return;
+
+            Transform root = ModelRoot;
+
+            root.SetPositionAndRotation(
+                groupAttach.position +
+                groupAttach.rotation * groupRelativePosition,
+                groupAttach.rotation * groupRelativeRotation
+            );
+        }
+
         private void OnDisable()
         {
             // Desabilitar cancela os grabs em andamento
             // (o selectExited remove cada um de activeGrabs).
             SetInteractablesEnabled(false);
 
+            lastMode = null;
             lastAllowed = null;
+
+            groupGrab = null;
+            groupAttach = null;
 
             if (RobotControlState.Instance != null)
             {
@@ -125,8 +209,6 @@ namespace RobotArm3D.ExplodedView
                         partObject.AddComponent<XRGrabInteractable>();
                 }
 
-                grab.trackPosition = true;
-                grab.trackRotation = allowPartRotation;
                 grab.throwOnDetach = false;
 
                 // Segura no ponto onde a mão pinçou, sem
@@ -145,6 +227,27 @@ namespace RobotArm3D.ExplodedView
                 $"[Exploded View] {interactables.Count} peças " +
                 "prontas para segurar."
             );
+        }
+
+        // No modo individual o XRI move a peça; no modo conjunto
+        // ele não move nada e o modelo inteiro segue a mão (LateUpdate).
+        private void ApplyTrackingForMode(ModelMoveMode mode)
+        {
+            bool individual =
+                mode == ModelMoveMode.Individual;
+
+            for (int i = 0; i < interactables.Count; i++)
+            {
+                XRGrabInteractable grab = interactables[i];
+
+                if (grab == null)
+                    continue;
+
+                grab.trackPosition = individual;
+
+                grab.trackRotation =
+                    individual && allowPartRotation;
+            }
         }
 
         private void SetInteractablesEnabled(bool value)
@@ -179,6 +282,38 @@ namespace RobotArm3D.ExplodedView
             {
                 RobotControlState.Instance.BeginModelGrab();
             }
+
+            // Só o primeiro grab conduz o modelo no modo conjunto.
+            if (
+                MoveMode != ModelMoveMode.Group ||
+                groupGrab != null
+            )
+            {
+                return;
+            }
+
+            Transform attach =
+                args.interactorObject.GetAttachTransform(
+                    args.interactableObject
+                );
+
+            if (attach == null)
+                return;
+
+            Transform root = ModelRoot;
+
+            Quaternion inverseAttach =
+                Quaternion.Inverse(attach.rotation);
+
+            groupGrab = grab;
+            groupAttach = attach;
+
+            groupRelativePosition =
+                inverseAttach *
+                (root.position - attach.position);
+
+            groupRelativeRotation =
+                inverseAttach * root.rotation;
         }
 
         private void OnPartGrabEnded(
@@ -190,6 +325,12 @@ namespace RobotArm3D.ExplodedView
 
             if (grab == null)
                 return;
+
+            if (grab == groupGrab)
+            {
+                groupGrab = null;
+                groupAttach = null;
+            }
 
             if (
                 activeGrabs.Remove(grab) &&
@@ -204,13 +345,25 @@ namespace RobotArm3D.ExplodedView
         // PODE MANIPULAR?
         // =========================================================
 
-        private bool CanManipulate()
+        private bool CanManipulate(ModelMoveMode mode)
         {
             if (controller == null)
                 return false;
 
-            if (!controller.IsExploded || controller.IsAnimating)
+            if (controller.IsAnimating)
                 return false;
+
+            if (!ModelRoot.gameObject.activeInHierarchy)
+                return false;
+
+            // Peça solta só faz sentido com o modelo explodido.
+            if (
+                mode == ModelMoveMode.Individual &&
+                !controller.IsExploded
+            )
+            {
+                return false;
+            }
 
             if (RobotControlState.Instance == null)
                 return false;
