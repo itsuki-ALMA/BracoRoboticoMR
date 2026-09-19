@@ -53,6 +53,8 @@ namespace RobotArm3D.ExplodedView
 
         private Coroutine animationCoroutine;
 
+        private bool placedInFront;
+
         // O plano é gravado em posições de mundo. Aqui ele é
         // convertido para o espaço local do modelo, assim o
         // "montar/explodir" acompanha o grupo se ele for movido
@@ -93,17 +95,22 @@ namespace RobotArm3D.ExplodedView
                 >();
             }
 
-            if (placeInFrontOfUser)
+        }
+
+
+        // Roda a cada vez que o modelo é exibido até conseguir posicionar.
+        // (Uma corrotina iniciada no Awake morre se o modelo for ocultado
+        // no início do app, e ele ficaria no ponto original do mundo.)
+        private void OnEnable()
+        {
+            if (placeInFrontOfUser && !placedInFront)
             {
-                StartCoroutine(PlaceInFrontOfUser());
+                StartCoroutine(PlaceWhenReady());
             }
         }
 
 
-        // Espera a câmera XR estar rastreando (início do app) e
-        // move o modelo inteiro (as peças são filhas) para a frente
-        // do olhar. Roda uma vez, antes de qualquer manipulação.
-        private IEnumerator PlaceInFrontOfUser()
+        private IEnumerator PlaceWhenReady()
         {
             while (
                 Time.timeSinceLevelLoad < 1f ||
@@ -113,12 +120,23 @@ namespace RobotArm3D.ExplodedView
                 yield return null;
             }
 
+            PlaceInFront();
+
+            placedInFront = true;
+        }
+
+
+        // Move o modelo inteiro (as peças são filhas da raiz) para a
+        // frente do olhar, com o centro do conjunto no ponto alvo.
+        private void PlaceInFront()
+        {
             if (
+                Camera.main == null ||
                 explosionPlan == null ||
                 !explosionPlan.HasPlan()
             )
             {
-                yield break;
+                return;
             }
 
             Transform head =
@@ -436,6 +454,12 @@ namespace RobotArm3D.ExplodedView
             ApplyPose(false);
 
             exploded = false;
+
+            // RESETAR também traz o modelo de volta para a frente do olhar.
+            if (placeInFrontOfUser)
+            {
+                PlaceInFront();
+            }
         }
 
 
