@@ -52,8 +52,15 @@ namespace RobotArm3D.ExplodedView
         [SerializeField]
         private bool allowPartRotation = true;
 
-        private readonly List<XRGrabInteractable> interactables =
-            new List<XRGrabInteractable>();
+        private class PartState
+        {
+            public XRGrabInteractable grab;
+            public Rigidbody body;
+            public Transform originalParent;
+        }
+
+        private readonly List<PartState> parts =
+            new List<PartState>();
 
         private readonly HashSet<XRGrabInteractable> activeGrabs =
             new HashSet<XRGrabInteractable>();
@@ -136,6 +143,8 @@ namespace RobotArm3D.ExplodedView
 
         private void LateUpdate()
         {
+            RepairParts();
+
             if (groupGrab == null || groupAttach == null)
                 return;
 
@@ -220,11 +229,18 @@ namespace RobotArm3D.ExplodedView
 
                 grab.enabled = false;
 
-                interactables.Add(grab);
+                parts.Add(
+                    new PartState
+                    {
+                        grab = grab,
+                        body = body,
+                        originalParent = partObject.transform.parent
+                    }
+                );
             }
 
             Debug.Log(
-                $"[Exploded View] {interactables.Count} peças " +
+                $"[Exploded View] {parts.Count} peças " +
                 "prontas para segurar."
             );
         }
@@ -236,9 +252,9 @@ namespace RobotArm3D.ExplodedView
             bool individual =
                 mode == ModelMoveMode.Individual;
 
-            for (int i = 0; i < interactables.Count; i++)
+            for (int i = 0; i < parts.Count; i++)
             {
-                XRGrabInteractable grab = interactables[i];
+                XRGrabInteractable grab = parts[i].grab;
 
                 if (grab == null)
                     continue;
@@ -252,11 +268,60 @@ namespace RobotArm3D.ExplodedView
 
         private void SetInteractablesEnabled(bool value)
         {
-            for (int i = 0; i < interactables.Count; i++)
+            for (int i = 0; i < parts.Count; i++)
             {
-                if (interactables[i] != null)
+                if (parts[i].grab != null)
                 {
-                    interactables[i].enabled = value;
+                    parts[i].grab.enabled = value;
+                }
+            }
+        }
+
+        // O XRI tira a peça segurada do pai enquanto ela está na mão.
+        // No modo conjunto isso a deixaria para trás quando a raiz se
+        // move, então ela é mantida no pai original. Também conserta
+        // qualquer peça que tenha ficado solta ou dinâmica.
+        private void RepairParts()
+        {
+            bool individual =
+                MoveMode == ModelMoveMode.Individual;
+
+            for (int i = 0; i < parts.Count; i++)
+            {
+                PartState state = parts[i];
+
+                if (state.grab == null)
+                    continue;
+
+                // No modo individual o XRI segura a peça de propósito.
+                if (
+                    individual &&
+                    activeGrabs.Contains(state.grab)
+                )
+                {
+                    continue;
+                }
+
+                Transform partTransform =
+                    state.grab.transform;
+
+                if (
+                    state.originalParent != null &&
+                    partTransform.parent != state.originalParent
+                )
+                {
+                    partTransform.SetParent(
+                        state.originalParent,
+                        true
+                    );
+                }
+
+                if (
+                    state.body != null &&
+                    !state.body.isKinematic
+                )
+                {
+                    state.body.isKinematic = true;
                 }
             }
         }
