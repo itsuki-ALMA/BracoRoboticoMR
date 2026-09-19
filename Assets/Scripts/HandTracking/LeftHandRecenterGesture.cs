@@ -44,6 +44,15 @@ public class LeftHandRecenterGesture : MonoBehaviour
                 return;
             }
 
+            // Pinçar para segurar o modelo/peça não pode
+            // iniciar a calibração (o braço real iria pro neutro).
+            if (RobotControlState.Instance.IsManipulatingModel)
+            {
+                pinchTimer = 0f;
+                wasPinching = pinching;
+                return;
+            }
+
             if (pinching)
             {
                 pinchTimer +=

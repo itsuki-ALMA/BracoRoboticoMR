@@ -29,10 +29,24 @@ namespace RobotArm3D.ExplodedView
 
         private Coroutine animationCoroutine;
 
+        // O plano é gravado em posições de mundo. Aqui ele é
+        // convertido para o espaço local do modelo, assim o
+        // "montar/explodir" acompanha o grupo se ele for movido
+        // ou girado, e desfaz o que foi movido peça a peça.
+        private Vector3[] assembledLocalPositions;
+        private Vector3[] explodedLocalPositions;
+        private Quaternion[] partLocalRotations;
+
         public bool IsExploded => exploded;
 
         public bool IsAnimating =>
             animationCoroutine != null;
+
+        public Transform ModelRoot =>
+            explosionPlan != null &&
+            explosionPlan.ModelRoot != null
+                ? explosionPlan.ModelRoot
+                : transform;
 
 
         private void Awake()
@@ -42,6 +56,143 @@ namespace RobotArm3D.ExplodedView
                 explosionPlan =
                     GetComponent<RobotExplosionPlan>();
             }
+
+            BuildLocalPlan();
+
+            if (
+                GetComponent<RobotExplodedPartInteraction>()
+                == null
+            )
+            {
+                gameObject.AddComponent<
+                    RobotExplodedPartInteraction
+                >();
+            }
+
+            CreateGroupHandle();
+        }
+
+
+        // Handle (esfera) para mover/girar o conjunto todo.
+        // Só cria se ainda não existir um na cena.
+        private void CreateGroupHandle()
+        {
+            if (
+                explosionPlan == null ||
+                !explosionPlan.HasPlan()
+            )
+            {
+                return;
+            }
+
+            if (
+                FindFirstObjectByType<RobotModelXRGrabMover>()
+                != null
+            )
+            {
+                return;
+            }
+
+            Bounds bounds =
+                explosionPlan.CalculateCurrentModelBounds();
+
+            Vector3 worldPosition =
+                bounds.center +
+                Vector3.up *
+                (bounds.extents.y + 0.12f);
+
+            RobotModelXRGrabMover.Create(
+                ModelRoot,
+                this,
+                ModelRoot.InverseTransformPoint(
+                    worldPosition
+                )
+            );
+        }
+
+
+        // =========================================================
+        // PLANO EM ESPAÇO LOCAL
+        // =========================================================
+
+        private void BuildLocalPlan()
+        {
+            if (
+                explosionPlan == null ||
+                !explosionPlan.HasPlan()
+            )
+            {
+                assembledLocalPositions = null;
+                explodedLocalPositions = null;
+                partLocalRotations = null;
+                return;
+            }
+
+            Transform root = ModelRoot;
+
+            int count =
+                explosionPlan.Entries.Count;
+
+            assembledLocalPositions =
+                new Vector3[count];
+
+            explodedLocalPositions =
+                new Vector3[count];
+
+            partLocalRotations =
+                new Quaternion[count];
+
+            for (int i = 0; i < count; i++)
+            {
+                RobotExplosionPlanEntry entry =
+                    explosionPlan.Entries[i];
+
+                partLocalRotations[i] =
+                    Quaternion.identity;
+
+                if (entry == null ||
+                    entry.Part == null)
+                {
+                    continue;
+                }
+
+                assembledLocalPositions[i] =
+                    root.InverseTransformPoint(
+                        entry.AssembledWorldPosition
+                    );
+
+                explodedLocalPositions[i] =
+                    root.InverseTransformPoint(
+                        entry.ExplodedWorldPosition
+                    );
+
+                // A explosão nunca girou as peças, então a
+                // rotação atual (no Awake) é a rotação montada.
+                partLocalRotations[i] =
+                    Quaternion.Inverse(root.rotation) *
+                    entry.Part.transform.rotation;
+            }
+        }
+
+
+        private void GetTarget(
+            int index,
+            bool explode,
+            out Vector3 position,
+            out Quaternion rotation)
+        {
+            Transform root = ModelRoot;
+
+            position =
+                root.TransformPoint(
+                    explode
+                        ? explodedLocalPositions[index]
+                        : assembledLocalPositions[index]
+                );
+
+            rotation =
+                root.rotation *
+                partLocalRotations[index];
         }
 
 
@@ -111,8 +262,8 @@ namespace RobotArm3D.ExplodedView
             Vector3[] startPositions =
                 new Vector3[count];
 
-            Vector3[] targetPositions =
-                new Vector3[count];
+            Quaternion[] startRotations =
+                new Quaternion[count];
 
             for (int i = 0; i < count; i++)
             {
@@ -128,10 +279,8 @@ namespace RobotArm3D.ExplodedView
                 startPositions[i] =
                     entry.Part.transform.position;
 
-                targetPositions[i] =
-                    explode
-                        ? entry.ExplodedWorldPosition
-                        : entry.AssembledWorldPosition;
+                startRotations[i] =
+                    entry.Part.transform.rotation;
             }
 
             float elapsed = 0f;
@@ -161,18 +310,46 @@ namespace RobotArm3D.ExplodedView
                         continue;
                     }
 
-                    entry.Part.transform.position =
+                    // O alvo é recalculado a cada frame a partir do
+                    // modelo, então continua correto se o grupo mexer.
+                    GetTarget(
+                        i,
+                        explode,
+                        out Vector3 targetPosition,
+                        out Quaternion targetRotation
+                    );
+
+                    entry.Part.transform.SetPositionAndRotation(
                         Vector3.LerpUnclamped(
                             startPositions[i],
-                            targetPositions[i],
+                            targetPosition,
                             curveValue
-                        );
+                        ),
+                        Quaternion.SlerpUnclamped(
+                            startRotations[i],
+                            targetRotation,
+                            curveValue
+                        )
+                    );
                 }
 
                 yield return null;
             }
 
-            // Garante posição exata no final.
+            // Garante pose exata no final.
+            ApplyPose(explode);
+
+            exploded = explode;
+
+            animationCoroutine = null;
+        }
+
+
+        private void ApplyPose(bool explode)
+        {
+            int count =
+                explosionPlan.Entries.Count;
+
             for (int i = 0; i < count; i++)
             {
                 RobotExplosionPlanEntry entry =
@@ -184,13 +361,18 @@ namespace RobotArm3D.ExplodedView
                     continue;
                 }
 
-                entry.Part.transform.position =
-                    targetPositions[i];
+                GetTarget(
+                    i,
+                    explode,
+                    out Vector3 targetPosition,
+                    out Quaternion targetRotation
+                );
+
+                entry.Part.transform.SetPositionAndRotation(
+                    targetPosition,
+                    targetRotation
+                );
             }
-
-            exploded = explode;
-
-            animationCoroutine = null;
         }
 
 
@@ -203,25 +385,9 @@ namespace RobotArm3D.ExplodedView
             if (!ValidatePlan())
                 return;
 
-            if (animationCoroutine != null)
-            {
-                StopCoroutine(animationCoroutine);
-                animationCoroutine = null;
-            }
+            StopAnimation();
 
-            foreach (
-                RobotExplosionPlanEntry entry
-                in explosionPlan.Entries)
-            {
-                if (entry == null ||
-                    entry.Part == null)
-                {
-                    continue;
-                }
-
-                entry.Part.transform.position =
-                    entry.AssembledWorldPosition;
-            }
+            ApplyPose(false);
 
             exploded = false;
         }
@@ -236,27 +402,21 @@ namespace RobotArm3D.ExplodedView
             if (!ValidatePlan())
                 return;
 
+            StopAnimation();
+
+            ApplyPose(true);
+
+            exploded = true;
+        }
+
+
+        private void StopAnimation()
+        {
             if (animationCoroutine != null)
             {
                 StopCoroutine(animationCoroutine);
                 animationCoroutine = null;
             }
-
-            foreach (
-                RobotExplosionPlanEntry entry
-                in explosionPlan.Entries)
-            {
-                if (entry == null ||
-                    entry.Part == null)
-                {
-                    continue;
-                }
-
-                entry.Part.transform.position =
-                    entry.ExplodedWorldPosition;
-            }
-
-            exploded = true;
         }
 
 
@@ -284,6 +444,15 @@ namespace RobotArm3D.ExplodedView
                 );
 
                 return false;
+            }
+
+            if (
+                assembledLocalPositions == null ||
+                assembledLocalPositions.Length !=
+                explosionPlan.Entries.Count
+            )
+            {
+                BuildLocalPlan();
             }
 
             return true;

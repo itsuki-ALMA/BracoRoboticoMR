@@ -21,6 +21,31 @@ public class RobotControlState : MonoBehaviour
     public Vector3 ZeroPosition =>
         zeroPosition;
 
+    // Enquanto o usuário segura o modelo/uma peça (e um instante
+    // depois de soltar), a pinça esquerda não pode iniciar recalibração.
+    private const float ModelGrabCooldown = 0.5f;
+
+    private int modelGrabCount;
+    private float modelGrabCooldownUntil;
+
+    public bool IsManipulatingModel =>
+        modelGrabCount > 0 ||
+        Time.time < modelGrabCooldownUntil;
+
+    public void BeginModelGrab()
+    {
+        modelGrabCount++;
+    }
+
+    public void EndModelGrab()
+    {
+        modelGrabCount =
+            Mathf.Max(0, modelGrabCount - 1);
+
+        modelGrabCooldownUntil =
+            Time.time + ModelGrabCooldown;
+    }
+
     private void Awake()
     {
         if (Instance != null && Instance != this)
